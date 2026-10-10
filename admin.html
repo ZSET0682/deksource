@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>재고 관리 · 덱소스</title>
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<link rel="stylesheet" href="style.css">
+<style>
+  .save-bar { position: sticky; bottom: 0; z-index: 10; background: rgba(11,15,23,.95); border-top: 1px solid var(--line); padding: 12px 16px; }
+  .save-bar .row { max-width: 1280px; margin: 0 auto; }
+  .vcell { white-space: nowrap; }
+  .vcell .lbl { font-size: 11px; color: var(--muted); display: block; margin-bottom: 3px; }
+  .vcell .ref { font-size: 11px; color: var(--muted); display: block; margin-top: 3px; }
+  .vcell .ref a { color: var(--muted); }
+  .pair { display: flex; gap: 4px; }
+  .inp.q { width: 58px; text-align: right; }
+  label.has { width: 58px; display: inline-flex; align-items: center; justify-content: center; gap: 3px; font-size: 13px;
+    border: 1px solid var(--line); border-radius: 8px; cursor: pointer; }
+  label.has.dirty { border-color: var(--gold); }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+  .grid2 label { font-size: 13px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
+  .tbl-wrap { overflow-x: auto; }
+  .stat { font-size: 14px; }
+  .stat b { color: var(--gold); }
+  details.panel summary { cursor: pointer; list-style: none; }
+  details.panel summary h2 { display: inline; }
+  details.panel summary::before { content: '▸ '; color: var(--muted); }
+  details.panel[open] summary::before { content: '▾ '; }
+  details.panel[open] summary { margin-bottom: 12px; }
+</style>
+</head>
+<body>
+<div id="loginView" class="wrap login" hidden>
+  <div class="panel">
+    <h2>재고 관리 로그인</h2>
+    <form id="loginForm" class="row">
+      <input class="inp" id="pw" type="password" placeholder="관리자 비밀번호" autocomplete="current-password" style="flex:1">
+      <button class="btn gold">들어가기</button>
+    </form>
+    <p class="hint warn" id="loginErr"></p>
+  </div>
+</div>
+
+<div id="mainView" hidden>
+  <header class="top">
+    <div class="top-in">
+      <div class="brand"><b>재고 관리</b><small id="updated"></small></div>
+      <div class="spacer"></div>
+      <a class="btn" href="./" target="_blank">상점 보기</a>
+      <button class="btn ghost" id="logout">로그아웃</button>
+    </div>
+  </header>
+  <main class="wrap">
+    <details class="panel" id="setPanel">
+      <summary><h2>상점 설정 (오픈채팅 주소 · 최소 금액 · 공지)</h2></summary>
+      <div class="grid2">
+        <label>카카오톡 오픈채팅 주소<input class="inp" id="sOpenchat" placeholder="https://open.kakao.com/o/..."></label>
+        <label>최소 주문 금액(원)<input class="inp" id="sMin" type="number" min="0" step="1000"></label>
+      </div>
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);margin-top:10px">상단 공지 (배송비·입금 안내 등, 비우면 안 보임)
+        <textarea class="inp" id="sNotice" rows="3"></textarea></label>
+    </details>
+
+    <details class="panel">
+      <summary><h2>가격 일괄 채우기</h2></summary>
+      <p class="hint">가격이 <b>비어 있는</b> 칸만 채워요. 이미 넣은 가격은 건드리지 않아요. 채운 뒤 아래 저장을 눌러야 반영돼요.</p>
+      <div class="row" style="margin-bottom:10px">
+        <button class="btn" id="fillMarket">수집한 시세로 채우기</button>
+        <span class="hint" id="marketInfo"></span>
+      </div>
+      <div class="grid2" id="defaults"></div>
+      <div class="row" style="margin-top:10px"><button class="btn" id="fillDefaults">등급별 기본가로 채우기</button></div>
+    </details>
+
+    <details class="panel" id="ordPanel">
+      <summary><h2>거래 내역 <span class="mut" id="ordSum" style="font-size:13px;font-weight:500"></span></h2></summary>
+      <p class="hint">주문서 링크에서 '거래 완료'를 누른 주문들이에요. 완료 취소하면 수량 관리 카드는 뺐던 수량이 재고로 돌아가요.</p>
+      <div class="tbl-wrap"><table class="t">
+        <thead><tr><th>완료 시각</th><th>내용</th><th class="num">금액</th><th></th></tr></thead>
+        <tbody id="ordRows"></tbody>
+      </table></div>
+    </details>
+
+    <div class="filters">
+      <input class="search" id="q" type="search" placeholder="이름 / 번호 검색">
+      <select class="sel" id="fRarity"><option value="">모든 등급</option></select>
+      <select class="sel" id="fShow">
+        <option value="">전체 카드</option>
+        <option value="stock">재고 있는 것</option>
+        <option value="noprice">재고 있는데 가격 없음</option>
+        <option value="dirty">수정한 것</option>
+      </select>
+    </div>
+    <p class="stat" id="stat"></p>
+    <div class="panel tbl-wrap" style="padding:0 8px">
+      <table class="t">
+        <thead><tr><th></th><th>카드</th><th>재고 · 가격 <span class="mut" style="font-weight:400">(서사 이상·2천원 이상 희귀는 수량, 나머지는 있음/없음 — 가격을 바꾸면 저장 후 칸이 바뀌어요)</span></th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </main>
+  <div class="save-bar">
+    <div class="row">
+      <span id="dirtyInfo" class="hint">수정한 내용 없음</span>
+      <div class="spacer"></div>
+      <button class="btn ghost" id="revert">되돌리기</button>
+      <button class="btn gold" id="save" disabled>저장</button>
+    </div>
+  </div>
+</div>
+
+<script src="common.js"></script>
+<script>
+let cards, byId, server = { items: {}, settings: {} };
+let edits = {};          // sku -> { q, p } (서버값과 다른 것만)
+let market = null;       // 수집 시세 { id: price }
+const DEFAULT_KEYS = [
+  ['common', '일반'], ['uncommon', '특별'], ['rare', '희귀'], ['epic', '서사'], ['showcase', '쇼케이스'],
+];
+
+const cur = (sku) => edits[sku] || server.items[sku] || { q: 0, p: 0 };
+
+async function boot() {
+  ({ cards, byId } = await loadCards());
+  if (!getAdminKey()) return showLogin();
+  try {
+    server = await adminFetch('/api/admin/inv');
+  } catch (e) {
+    return showLogin(e.status === 401 ? '' : e.message);
+  }
+  document.getElementById('loginView').hidden = true;
+  document.getElementById('mainView').hidden = false;
+  fillSettings();
+  if (!server.settings.openchat) document.getElementById('setPanel').open = true;
+  buildDefaults();
+  const fr = document.getElementById('fRarity');
+  if (fr.options.length === 1) for (const r of RARITY_ORDER) fr.add(new Option(RARITY_KO[r], r));
+  loadOrders();
+  adminFetch('/api/admin/prices').catch(() => null).then((m) => {
+    market = m && m.entries;
+    document.getElementById('marketInfo').textContent = market
+      ? `시세 ${Object.keys(market).length}종 (${(m.generatedAt || '').slice(0, 10)} 수집)` : '수집한 시세 파일이 없어요';
+    render();
+  }).catch(() => {});
+  render();
+}
+
+function showLogin(msg = '') {
+  document.getElementById('mainView').hidden = true;
+  document.getElementById('loginView').hidden = false;
+  document.getElementById('loginErr').textContent = msg;
+}
+document.getElementById('loginForm').onsubmit = async (e) => {
+  e.preventDefault();
+  setAdminKey(document.getElementById('pw').value);
+  try { await adminFetch('/api/admin/inv'); boot(); }
+  catch (err) { setAdminKey(''); document.getElementById('loginErr').textContent = err.message; }
+};
+document.getElementById('logout').onclick = () => { setAdminKey(''); location.reload(); };
+
+function fillSettings() {
+  const s = server.settings;
+  document.getElementById('sOpenchat').value = s.openchat || '';
+  document.getElementById('sMin').value = s.minOrder ?? 20000;
+  document.getElementById('sNotice').value = s.notice || '';
+  document.getElementById('updated').textContent = server.updatedAt ? '마지막 저장 ' + new Date(server.updatedAt).toLocaleString('ko-KR') : '아직 저장 기록 없음';
+}
+function settingsDirty() {
+  const s = server.settings;
+  return document.getElementById('sOpenchat').value.trim() !== (s.openchat || '') ||
+    Number(document.getElementById('sMin').value) !== (s.minOrder ?? 20000) ||
+    document.getElementById('sNotice').value !== (s.notice || '');
+}
+for (const id of ['sOpenchat', 'sMin', 'sNotice']) document.getElementById(id).addEventListener('input', updateDirty);
+
+function buildDefaults() {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem('defaultPrices') || '{}'); } catch {}
+  document.getElementById('defaults').innerHTML = DEFAULT_KEYS.map(([k, label]) =>
+    `<label>${label}<input class="inp" type="number" min="0" step="100" data-def="${k}" value="${saved[k] ?? ''}" placeholder="원"></label>`).join('');
+}
+
+function marketRef(card) {
+  return (market && market[card.id]) || null;
+}
+
+function rowVariants(card) {
+  return skusOf(card).map((s) => ({ ...s, ...cur(s.sku) }));
+}
+
+function render() {
+  const q = document.getElementById('q').value.trim().toLowerCase();
+  const fr = document.getElementById('fRarity').value;
+  const fs = document.getElementById('fShow').value;
+  const list = cards.filter((c) => {
+    if (fr && c.rarity !== fr) return false;
+    if (q && !(c.name.toLowerCase().includes(q) || c.no.includes(q))) return false;
+    const vs = rowVariants(c);
+    if (fs === 'stock' && !vs.some((v) => v.q > 0)) return false;
+    if (fs === 'noprice' && !vs.some((v) => v.q > 0 && !v.p)) return false;
+    if (fs === 'dirty' && !vs.some((v) => edits[v.sku])) return false;
+    return true;
+  });
+  document.getElementById('rows').innerHTML = list.map((c) => {
+    const vs = rowVariants(c);
+    const cell = (v) => {
+      if (!v) return '<td class="mut">—</td>';
+      const ref = marketRef(c);
+      return `<td class="vcell">
+        <div class="pair">
+          ${isCounted(c, v.p)
+            ? `<input class="inp q ${edits[v.sku] && edits[v.sku].q !== (server.items[v.sku]?.q || 0) ? 'dirty' : ''}" type="number" min="0" inputmode="numeric" data-sku="${v.sku}" data-f="q" value="${v.q || ''}" placeholder="0">`
+            : `<label class="has ${edits[v.sku] && edits[v.sku].q !== (server.items[v.sku]?.q || 0) ? 'dirty' : ''}"><input type="checkbox" data-sku="${v.sku}" data-f="q" ${v.q > 0 ? 'checked' : ''}> 있음</label>`}
+          <input class="inp n ${edits[v.sku] && edits[v.sku].p !== (server.items[v.sku]?.p || 0) ? 'dirty' : ''}" type="number" min="0" step="100" inputmode="numeric" data-sku="${v.sku}" data-f="p" value="${v.p || ''}" placeholder="가격">
+        </div>
+        ${ref ? `<span class="ref">시세 ${won(ref)}</span>` : ''}
+      </td>`;
+    };
+    return `<tr>
+      <td><img class="s" loading="lazy" src="${imgUrl(c, 120)}" data-view="${c.id}" alt=""></td>
+      <td><b>${esc(c.name)}</b><div class="mut" style="font-size:12px">${c.no} · <span class="r ${c.rarity}">${RARITY_KO[c.rarity]}</span> · ${esc(c.type)}</div></td>
+      ${cell(vs[0])}
+    </tr>`;
+  }).join('') || '<tr><td colspan="3" class="empty">조건에 맞는 카드가 없어요</td></tr>';
+  updateStat();
+  updateDirty();
+}
+
+function updateStat() {
+  const has = {};
+  let noPrice = 0, qty = 0, value = 0, kinds = 0, flags = 0;
+  for (const c of cards) {
+    const v = cur(c.id);
+    if (v.q <= 0) continue;
+    has[c.rarity] = (has[c.rarity] || 0) + 1;
+    if (!v.p) noPrice++;
+    if (isCounted(c, v.p)) { kinds++; qty += v.q; value += v.q * (v.p || 0); } else flags++;
+  }
+  document.getElementById('stat').innerHTML =
+    `수량 관리 <b>${kinds}</b>종 <b>${qty}</b>장 · 총액 <b>${won(value)}</b> · 있음 체크 <b>${flags}</b>종` +
+    (noPrice ? ` · <span class="bad">가격 없는 재고 ${noPrice}종 (상점에 안 보여요)</span>` : '');
+}
+
+function setEdit(sku, field, val) {
+  const base = server.items[sku] || { q: 0, p: 0 };
+  const next = { ...cur(sku), [field]: Math.max(0, Math.floor(Number(val) || 0)) };
+  if (next.q === (base.q || 0) && next.p === (base.p || 0)) delete edits[sku];
+  else edits[sku] = next;
+}
+
+function updateDirty() {
+  const n = Object.keys(edits).length;
+  const sd = settingsDirty();
+  document.getElementById('dirtyInfo').textContent = n || sd
+    ? `저장 안 한 변경 ${n}건${sd ? ' + 설정' : ''}` : '수정한 내용 없음';
+  document.getElementById('save').disabled = !n && !sd;
+}
+
+document.getElementById('rows').addEventListener('input', (e) => {
+  const t = e.target;
+  if (!t.dataset.sku) return;
+  const b = server.items[t.dataset.sku] || {};
+  // 있음 체크: 원래 수량이 있으면 그대로 두고, 없으면 1
+  const val = t.type === 'checkbox' ? (t.checked ? Math.max(1, b.q || 0) : 0) : t.value;
+  setEdit(t.dataset.sku, t.dataset.f, val);
+  (t.type === 'checkbox' ? t.parentElement : t).classList.toggle('dirty', Number(val || 0) !== (b[t.dataset.f] || 0));
+  updateStat();
+  updateDirty();
+});
+document.getElementById('rows').addEventListener('click', (e) => {
+  const t = e.target.closest('[data-view]');
+  if (t) openViewer(byId[t.dataset.view]);
+});
+for (const id of ['q', 'fRarity', 'fShow']) document.getElementById(id).addEventListener('input', render);
+
+function fillEmptyPrices(priceFor) {
+  let n = 0;
+  for (const c of cards) for (const s of skusOf(c)) {
+    if (cur(s.sku).p) continue;
+    const p = priceFor(c, s);
+    if (p > 0) { setEdit(s.sku, 'p', p); n++; }
+  }
+  render();
+  toast(`${n}칸 채웠어요`);
+}
+document.getElementById('fillMarket').onclick = () => {
+  if (!market) return toast('수집한 시세가 없어요');
+  fillEmptyPrices((c) => Math.round((marketRef(c) || 0) / 100) * 100);
+};
+document.getElementById('fillDefaults').onclick = () => {
+  const d = {};
+  for (const el of document.querySelectorAll('[data-def]')) d[el.dataset.def] = Number(el.value) || 0;
+  try { localStorage.setItem('defaultPrices', JSON.stringify(d)); } catch {}
+  fillEmptyPrices((c) => d[c.rarity] || 0);
+};
+
+async function loadOrders() {
+  const { orders } = await adminFetch('/api/admin/orders');
+  const live = orders.filter((o) => !o.canceled_at);
+  document.getElementById('ordSum').textContent =
+    `${live.length}건 · ${won(live.reduce((s, o) => s + o.total, 0))}`;
+  document.getElementById('ordRows').innerHTML = orders.map((o) => {
+    const desc = o.lines.map((l) => `${byId[l.sku] ? byId[l.sku].name : l.sku} ×${l.took}${l.took < l.qty ? `(요청 ${l.qty})` : ''}`).join(', ');
+    const link = `order.html?id=${o.id}&o=${encodeOrder(o.lines)}`;
+    return `<tr class="${o.canceled_at ? 'mut' : ''}">
+      <td style="white-space:nowrap">${new Date(o.done_at).toLocaleString('ko-KR')}</td>
+      <td>${esc(desc)}${o.canceled_at ? ' <b class="bad">· 취소됨</b>' : ''}</td>
+      <td class="num">${won(o.total)}</td>
+      <td style="white-space:nowrap"><a class="btn" href="${link}" target="_blank">주문서</a>
+        ${o.canceled_at ? '' : `<button class="btn danger" data-cancel="${o.id}">완료 취소</button>`}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="4" class="empty">아직 완료된 거래가 없어요</td></tr>';
+}
+document.getElementById('ordRows').addEventListener('click', async (e) => {
+  const t = e.target.closest('[data-cancel]');
+  if (!t || !confirm('이 거래를 완료 취소할까요?')) return;
+  try {
+    await adminFetch('/api/admin/orders', { method: 'DELETE', body: JSON.stringify({ id: t.dataset.cancel }) });
+    server = await adminFetch('/api/admin/inv');
+    await loadOrders();
+    render();
+    toast('완료 취소 · 재고 복구됨');
+  } catch (err) { alert(err.message); }
+});
+
+document.getElementById('revert').onclick = () => {
+  if (!confirm('저장 안 한 변경을 모두 되돌릴까요?')) return;
+  edits = {};
+  fillSettings();
+  render();
+};
+document.getElementById('save').onclick = async () => {
+  const btn = document.getElementById('save');
+  btn.disabled = true;
+  try {
+    server = await adminFetch('/api/admin/inv', {
+      method: 'PUT',
+      body: JSON.stringify({
+        items: edits,
+        settings: {
+          openchat: document.getElementById('sOpenchat').value,
+          minOrder: Number(document.getElementById('sMin').value),
+          notice: document.getElementById('sNotice').value,
+        },
+      }),
+    });
+    edits = {};
+    fillSettings();
+    render();
+    toast('저장했어요');
+  } catch (e) {
+    alert(e.message);
+    updateDirty();
+  }
+};
+window.addEventListener('beforeunload', (e) => {
+  if (Object.keys(edits).length) { e.preventDefault(); e.returnValue = ''; }
+});
+
+boot();
+</script>
+</body>
+</html>

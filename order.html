@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>구매 요청서</title>
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="top-in">
+    <div class="brand"><b>구매 요청서</b><small>리프트바운드 카톤 덱소스</small></div>
+    <div class="spacer"></div>
+    <a class="btn" href="./">상점으로</a>
+  </div>
+</header>
+<main class="wrap" style="max-width:860px">
+  <div class="notice" id="doneBanner" hidden></div>
+  <div class="panel">
+    <table class="t">
+      <thead><tr><th></th><th>카드</th><th class="num">단가</th><th class="num">수량</th><th class="num">금액</th><th class="num" id="stockTh">재고</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div class="total" style="margin-top:14px"><span>합계 <span class="mut" id="cnt" style="font-size:14px;font-weight:500"></span></span><b id="total"></b></div>
+    <p class="hint" id="warn"></p>
+  </div>
+
+  <div class="panel" id="adminBox" hidden>
+    <h2>판매자 메뉴</h2>
+    <p class="hint">거래가 끝나면 완료 처리하세요. 서사·쇼케이스와 2,000원 이상 희귀는 즉시 재고에서 빠져요(모자라면 남은 만큼만). 나머지는 있음/없음만 관리하므로 다 팔리면 관리자 페이지에서 '있음'을 해제하세요. 같은 주문은 두 번 완료되지 않아요.</p>
+    <div class="row">
+      <button class="btn gold" id="deduct">거래 완료 (수량 카드 재고 차감)</button>
+      <button class="btn" id="copyList">목록 텍스트 복사</button>
+    </div>
+    <p class="hint" id="deductResult"></p>
+  </div>
+</main>
+<script src="common.js"></script>
+<script>
+let byId, lines, inv = null, status = { done: false };
+const isAdmin = !!getAdminKey();
+const params = new URLSearchParams(location.search);
+const orderId = params.get('id') || '';
+
+async function init() {
+  ({ byId } = await loadCards());
+  lines = decodeOrder(params.get('o'))
+    .map((l) => ({ ...l, ...skuInfo(l.sku, byId) })).filter((l) => l.card);
+  if (!lines.length) {
+    document.getElementById('rows').innerHTML = '<tr><td colspan="6" class="empty">주문 내용이 없어요. 링크를 다시 확인해주세요.</td></tr>';
+    return;
+  }
+  await Promise.all([loadInv(), loadStatus()]);
+  document.getElementById('adminBox').hidden = !isAdmin;
+}
+
+async function loadStatus() {
+  if (orderId) status = await (await fetch(API + '/api/order?id=' + encodeURIComponent(orderId))).json();
+  const banner = document.getElementById('doneBanner');
+  banner.hidden = !status.done;
+  if (status.done) banner.textContent = `거래 완료된 주문이에요 (${new Date(status.doneAt).toLocaleString('ko-KR')})`;
+  const btn = document.getElementById('deduct');
+  btn.disabled = status.done || !orderId;
+  if (inv) render();
+  btn.textContent = status.done ? '거래 완료됨' : (orderId ? '거래 완료 (수량 카드 재고 차감)' : '주문번호 없는 링크라 완료 처리 불가');
+}
+
+async function loadInv() {
+  try {
+    inv = isAdmin ? (await adminFetch('/api/admin/inv')).items : (await (await fetch(API + '/api/inv')).json()).items;
+  } catch (e) {
+    inv = (await (await fetch(API + '/api/inv')).json()).items;
+  }
+  render();
+}
+
+function render() {
+  let total = 0, count = 0, short = 0;
+  document.getElementById('rows').innerHTML = lines.map((l) => {
+    const it = inv[l.sku] || { q: 0, p: 0 };
+    const sum = it.p * l.qty;
+    total += sum; count += l.qty;
+    const counted = isCounted(l.card, it.p);     // 서사 이상·2천원 이상 희귀만 수량 비교, 나머지는 있음/없음
+    const lack = !status.done && (counted ? it.q < l.qty : it.q <= 0);   // 완료된 주문은 이미 반영됐으니 비교하지 않음
+    if (lack) short++;
+    return `<tr>
+      <td><img class="s" src="${imgUrl(l.card, 120)}" data-view="${l.card.id}" alt=""></td>
+      <td><b>${esc(l.card.name)}</b><div class="mut" style="font-size:12px">${l.card.no} · ${RARITY_KO[l.card.rarity]}</div></td>
+      <td class="num">${it.p ? won(it.p) : '<span class="bad">가격 없음</span>'}</td>
+      <td class="num"><b>${l.qty}</b></td>
+      <td class="num">${won(sum)}</td>
+      <td class="num ${lack ? 'bad' : 'ok'}">${status.done ? '완료' : !counted ? (lack ? '없음' : '있음') : lack ? (it.q ? `${it.q}장뿐` : '품절') : (isAdmin ? it.q + '장' : '있음')}</td>
+    </tr>`;
+  }).join('');
+  document.getElementById('total').textContent = won(total);
+  document.getElementById('cnt').textContent = `${lines.length}종 ${count}장 · 현재 가격 기준`;
+  document.getElementById('warn').textContent = short ? `재고가 모자란 항목이 ${short}개 있어요.` : '';
+  document.getElementById('warn').className = 'hint' + (short ? ' warn' : '');
+}
+
+document.getElementById('deduct').onclick = async () => {
+  if (!confirm('거래 완료로 처리할까요?')) return;
+  const btn = document.getElementById('deduct');
+  btn.disabled = true;
+  try {
+    const res = await adminFetch('/api/admin/orders', {
+      method: 'POST', body: JSON.stringify({ id: orderId, lines: lines.map(({ sku, qty }) => ({ sku, qty })) }),
+    });
+    const miss = res.lines.filter((r) => r.took < r.qty);
+    document.getElementById('deductResult').textContent = `거래 완료 · ${won(res.total)}` +
+      (miss.length ? ` · 재고 부족으로 덜 빠진 카드: ${miss.map((r) => `${skuInfo(r.sku, byId).card.name} ${r.took}/${r.qty}`).join(', ')}` : '') +
+      ' · 있음/없음 카드가 다 팔렸으면 관리자 페이지에서 \'있음\'을 해제하세요';
+    toast('거래 완료 · 재고 반영됨');
+  } catch (e) {
+    alert(e.message);
+  }
+  await Promise.all([loadInv(), loadStatus()]);
+};
+document.getElementById('copyList').onclick = async () => {
+  const text = lines.map((l) => `${l.card.no} ${l.card.name} ×${l.qty}`).join('\n');
+  await copyText(text);
+  toast('복사됨');
+};
+document.addEventListener('click', (e) => {
+  const t = e.target.closest('[data-view]');
+  if (t) openViewer(byId[t.dataset.view]);
+});
+init();
+</script>
+</body>
+</html>
